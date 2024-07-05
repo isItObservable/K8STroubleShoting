@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.faultInjection.nameOverride }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      demo: exceeded-quota
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        demo: exceeded-quota
+    spec:
+      containers:
+        - name: {{ .Values.faultInjection.nameOverride }}
+          image: busybox
+          command: [ "sh", "-c", "sleep infinity" ]
+          resources:
+{{ toYaml .Values.busybox.resources | indent 12 }}

@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.faultInjection.nameOverride }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.faultInjection.replicas.min }}
+  selector:
+    matchLabels:
+      demo: pending-pod
+  template:
+    metadata:
+      annotations:
+        oneagent.dynatrace.com/inject: "false"
+      labels:
+        demo: pending-pod
+    spec:
+      containers:
+        - name: {{ .Values.faultInjection.nameOverride }}
+          image: busybox
+          command: ["sh", "-c", "sleep infinity"]
+          resources:
+{{ toYaml .Values.busybox.resources | indent 12 }}
+{{- if .Values.faultInjection.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.faultInjection.nodeSelector | indent 8 }}
+{{- end }}
+      tolerations:
+        - effect: NoSchedule
+          key: demo
+          operator: Equal
+          value: pending-pod

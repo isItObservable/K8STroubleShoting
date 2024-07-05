@@ -1,0 +1,24 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-kill-ingress-nginx
+  namespace: {{ .Values.faultInjection.namespace }}
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 5
+  successfulJobsHistoryLimit: 5
+  schedule: {{ .Values.faultInjection.schedule.killProcess | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: frequent-restarts
+          containers:
+            - name: kill-nginx
+              image: bitnami/kubectl:latest
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  kubectl exec --namespace {{ .Release.Namespace }} deployment/{{ .Values.faultInjection.nameOverride }}-controller -- pkill /nginx-ingress-controller

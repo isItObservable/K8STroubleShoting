@@ -1,0 +1,5 @@
+apiVersion: v2
+description: a deployment that violates a specified resource quota when scaled up
+name: exceeded-quota
+type: application
+version: 1.2.0

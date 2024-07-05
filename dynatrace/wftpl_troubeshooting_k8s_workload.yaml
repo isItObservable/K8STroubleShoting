@@ -1,0 +1,1960 @@
+metadata:
+  version: "1"
+  dependencies:
+    apps:
+      - id: dynatrace.automations
+        version: ^1.700.0
+      - id: dynatrace.ownership
+        version: ^1.7.6-dev.20240703T083556+cabe3c70
+      - id: dynatrace.slack
+        version: ^1.3.13-dev.20240704T131600+ad04d1cc
+  inputs:
+    - type: connection
+      schema: app:dynatrace.slack:connection
+      targets:
+        - tasks.send_other.connection
+        - tasks.send_traces_log.connection
+        - tasks.message_without_node.connection
+        - tasks.send_backoff_message.connection
+        - tasks.send_message_traces_logs.connection
+        - tasks.send_message_with_labels.connection
+        - tasks.send_message_with_traces.connection
+        - tasks.send_message_witout_trace.connection
+workflow:
+  title: Troubeshooting k8s workload
+  tasks:
+    send_other:
+      name: send_other
+      description: Send a message to a Slack workspace
+      action: dynatrace.slack:slack-send-message
+      input:
+        channel: "{{  _.item.slackChannel }}"
+        message: |-
+          *K8s TroubleShooting Assistant*
+          Hello,  
+          K8s has raised a failure event on the following workload  :
+          - For cluster *{{  _.item.clustername }}*
+            namespace: *{{  _.item.namespace }}*
+            workload: <{{_.item.workloadurl}}|{{_.item.workload}}]>
+            pod name: *{{  _.item.podname }}*
+            phase: * {{_.item.phase}}*
+            event: *{{_.item.reason}}*
+            message: *{{_.item.message}}*
+        reaction: []
+        connection: ""
+        workflowID: "{{ execution().workflow.id }}"
+        channelType: expression
+        executionID: "{{ execution().id }}"
+        executionDate: "{{ execution().started_at }}"
+        appendToThread: false
+        selectedRequestType: 0
+        attachmentToggleValue: none
+      position:
+        x: 1
+        y: 4
+      predecessors:
+        - javascript_merge
+      conditions:
+        states:
+          javascript_merge: OK
+        custom: '{{ result("javascript_merge").other_record | length >0 }}'
+      concurrency: 1
+      withItems: item in {{result("javascript_merge").other_record }}
+    get_owners_1:
+      name: get_owners_1
+      description: Retrieves owners from Entities and Team identifiers.
+      action: dynatrace.ownership:get-ownership-from-entity
+      input:
+        entityIds: |-
+          {% for sleep in result("get_k8s_events")["records"] %}  
+          {{ sleep.source }}  ,
+          {% endfor %}
+      position:
+        x: 0
+        y: 2
+      predecessors:
+        - get_k8s_events
+      conditions:
+        states:
+          get_k8s_events: OK
+        custom: '{{ result("get_k8s_events").records | length >0 }}'
+    merge_traces:
+      name: merge_traces
+      description: Build a custom task running js Code
+      action: dynatrace.automations:run-javascript
+      input:
+        script: "    // optional import of sdk modules
+
+          import { execution } from '@dynatrace-sdk/automation-utils';
+
+          import {getEnvironmentUrl} from \"@dynatrace-sdk/app-environment\"
+
+
+
+          type Unhealthytraces = {
+
+          \  namespace: string
+
+          \   workloadid: string
+
+          \  workloadurl: string
+
+          \  workload: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  url: string
+
+          \  slackChannel: string\ 
+
+          \  healthduration: string
+
+          \  phase: string
+
+          \  start: Date
+
+          }
+
+
+          type Unhealthy = {
+
+          \  namespace: string
+
+          \    workloadurl: string
+
+          \   workloadid: string
+
+          \  workload: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  slackChannel: string
+
+          \  phase: string
+
+          \  start: Date
+
+          }
+
+          type Result = {
+
+          \  trace_record: Unhealthytraces[]
+
+          \  unhealthy_record : Unhealthy[]
+
+          }
+
+
+          var  resultat_trace= Array<Unhealthytraces>();
+
+          var  resultat_unhealthy= Array<Unhealthy>();
+
+
+
+          export default async function ({ execution_id }) {
+
+
+          \  const ex = await execution(execution_id);
+
+          \  console.log('Automated script execution on behalf of', ex.trigger);
+
+
+          \  var result = await ex.result(\"backoff-processing\");
+
+          \  var traces= await ex.result(\"get_a_health_trace\");
+
+
+          \  for (const unhealthy of result.unhealthy_record )
+
+          \  {
+
+          \      var channel=false;
+
+          \      for(let i = 0; i < traces.length; i++)
+
+          \      {
+
+          \        for (const rec of traces[i].records )
+
+          \        {
+
+          \          if(unhealthy.workloadid==rec.workloadid)
+
+          \          {
+
+          \            channel=true;
+
+          \            let sleppresult: Unhealthytraces = {
+
+          \                    workload: unhealthy.workload,
+
+          \                    workloadid: unhealthy.workloadid,
+
+          \                    workloadurl: getEnvironmentUrl()+
+          \"/ui/apps/dynatrace.kubernetes/resources/workload?resourceSubType=de\
+          ployment&entityId=\"+ unhealthy.workloadid +\"&detailsTab=Overview\",
+
+          \                    clustername: unhealthy.clustername,
+
+          \                    namespace: unhealthy.namespace,
+
+          \                    owner: unhealthy.owner,
+
+          \                    podname: unhealthy.podname,
+
+          \                    reason: unhealthy.reason,
+
+          \                    message: unhealthy.message,
+
+          \                    phase: unhealthy.phase,
+
+          \                    url:
+          getEnvironmentUrl()+\"/ui/apps/dynatrace.classic.distributed.traces/#\
+          trace;traceid=\"+rec.traceid,
+
+          \                    healthduration: rec.duration,
+
+          \                    slackChannel : unhealthy.slackChannel,
+
+          \                    start: unhealthy.start
+
+          \                };\ 
+
+          \               resultat_trace.push(sleppresult);
+
+          \           \ 
+
+          \          }
+
+          \        }
+
+          \      }
+
+          \   \ 
+
+          \     if(!channel)
+
+          \     {
+
+          \       let sleppresult: Unhealthy = {
+
+          \                workload: unhealthy.workload,
+
+          \               workloadid: unhealthy.workloadid,
+
+          \                workloadurl: getEnvironmentUrl()+
+          \"/ui/apps/dynatrace.kubernetes/resources/workload?resourceSubType=de\
+          ployment&entityId=\"+ unhealthy.workloadid +\"&detailsTab=Overview\",
+
+          \                clustername: unhealthy.clustername,
+
+          \                namespace: unhealthy.namespace,
+
+          \                owner: unhealthy.owner,
+
+          \                podname: unhealthy.podname,
+
+          \                reason: unhealthy.reason,
+
+          \                message: unhealthy.message,
+
+          \                phase: unhealthy.phase,
+
+          \                slackChannel : unhealthy.slackChannel,
+
+          \                start: unhealthy.start
+
+          \              };\ 
+
+          \              resultat_unhealthy.push(sleppresult);
+
+          \           \ 
+
+          \     }
+
+          \   \ 
+
+          \  }
+
+
+          \  \ 
+
+
+          \ \ 
+
+          \  const res: Result = { unhealthy_record: resultat_unhealthy,
+          trace_record:resultat_trace };
+
+          \  return res;
+
+
+          }
+
+          \  "
+      position:
+        x: 1
+        y: 6
+      predecessors:
+        - get_a_health_trace
+      conditions:
+        states:
+          get_a_health_trace: OK
+    get_k8s_events:
+      name: get_k8s_events
+      description: Executes DQL query
+      action: dynatrace.automations:execute-dql-query
+      input:
+        query: >-
+          fetch events , from : -30min
+
+          | filter event.provider=="KUBERNETES_EVENT"
+
+          | filter event.status == "ACTIVE"
+
+          | filter dt.source_entity.type == "cloud_application_instance"
+
+          | fieldsRename workloadid=dt.entity.cloud_application_instance,
+          source=dt.entity.cloud_application, reason=
+          event.group_label,namespace
+          =dt.entity.cloud_application_namespace.name,
+          clustername=dt.entity.kubernetes_cluster.name,workloadname=dt.kubernetes.workload.name,podname=k8s.pod.name,
+          message=dt.kubernetes.event.message, start=event.start
+
+          | summarize message=takeLast(message),reason= takeLast(reason),start=
+          takeLast(start) ,status= takeLast(status) , by:{ workloadid,
+          source,namespace, podname, clustername, workloadname }
+
+          | filter status != "INFO"
+
+          | lookup [
+              fetch dt.entity.cloud_application_instance    
+          ], lookupField:id ,sourceField:workloadid ,
+          fields:{cloudApplicationInstancePhase}
+
+          | lookup  [
+              fetch dt.entity.cloud_application, from: -30m 
+              | fieldsAdd cloudApplicationLabels
+              | fieldsAdd owner= if(isNotNull(cloudApplicationLabels[dt.owner]),cloudApplicationLabels[dt.owner],else: "NA") 
+          ], sourceField:source, lookupField:id, fields:{owner }
+
+          | filter cloudApplicationInstancePhase != "RUNNING"
+
+          | summarize number=count(),start=last(start) , by:{source,
+          reason,namespace,clustername,workloadname,podname,message,owner,cloudApplicationInstancePhase}
+      position:
+        x: 0
+        y: 1
+      predecessors: []
+    send_traces_log:
+      name: send_traces_log
+      description: Send a message to a Slack workspace
+      action: dynatrace.slack:slack-send-message
+      input:
+        channel: "{{  _.item.slackChannel }}"
+        message: |
+          *K8s TroubleShooting Assistant*
+          Hello,  
+          Some Application are in errors  :
+          - For cluster *{{  _.item.clustername }}*
+            namespace: *{{  _.item.namespace }}*
+            pod name: *{{  _.item.podname }}*
+            workload: <{{_.item.workloadurl}}|{{_.item.workload}}>
+            phase: * {{ _.item.phase }}*
+            event: *{{ _.item.reason }}*
+            message: *{{ _.item.message }}*
+            log: {{ _.item.log }} 
+        reaction: []
+        connection: ""
+        workflowID: "{{ execution().workflow.id }}"
+        channelType: expression
+        executionID: "{{ execution().id }}"
+        executionDate: "{{ execution().started_at }}"
+        appendToThread: false
+        selectedRequestType: 0
+        attachmentToggleValue: none
+      position:
+        x: -3
+        y: 7
+      predecessors:
+        - merge_log_traces
+      conditions:
+        states:
+          merge_log_traces: OK
+        custom: '{{ result("merge_log_traces").log_record | length >0 }}'
+      concurrency: 1
+      withItems: item in {{ result("merge_log_traces").log_record }}
+    javascript_merge:
+      name: javascript_merge
+      description: Build a custom task running js Code
+      action: dynatrace.automations:run-javascript
+      input:
+        script: " // optional import of sdk modules
+
+          import { execution } from '@dynatrace-sdk/automation-utils';
+
+          import {getEnvironmentUrl} from \"@dynatrace-sdk/app-environment\"
+
+          type Backoff = {
+
+          \  namespace: string
+
+          \   workloadid: string
+
+          \  workload: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  slackChannel: string
+
+          \  phase: string
+
+          \  start: Date
+
+          }
+
+          type Schedule = {
+
+          \  namespace: string
+
+          \  workloadid: string
+
+          \  workload: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  slackChannel: string
+
+          \  phase: string
+
+          \  start: Date
+
+          }
+
+          type Other = {
+
+          \  namespace: string
+
+          \   workloadid: string
+
+          \  worloadurl: string
+
+          \  workload: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  slackChannel: string
+
+          \  phase:string
+
+          \  start: Date
+
+          }
+
+          type Unhealthy = {
+
+          \  namespace: string
+
+          \   workloadid: string
+
+          \  workload: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  slackChannel: string
+
+          \  phase: string
+
+          \  start: Date
+
+          }
+
+          type Result = {
+
+          \  backoff_record: Backoff[]
+
+          \  schedule_record: Schedule[]
+
+          \  other_record : Other[]
+
+          \  unhealthy_record : Other[]
+
+          }
+
+
+          var  resultat_backoff= Array<Backoff>();
+
+          var  resultat_schedule= Array<Schedule>();
+
+          var  resultat_unhealthy= Array<Unhealthy>();
+
+          var  resultat_other= Array<Other>();
+
+
+          export default async function ({ execution_id }) {
+
+
+          \  const ex = await execution(execution_id);
+
+          \  console.log('Automated script execution on behalf of', ex.trigger);
+
+
+          \  var result = await ex.result(\"get_k8s_events\");
+
+          \  var contactdetails=  await ex.result('get_owners_1');
+
+          \\ 
+
+          \  for (const workload of result.records )
+
+          \  {
+
+          \      var channel=\"\";
+
+          \      for(const own of contactdetails.owners)
+
+          \      {
+
+          \       \ 
+
+          \        if(own.identifier==workload.owner)
+
+          \        {
+
+          \          const contactDetails = own.contactDetails;
+
+          \          if(contactDetails != undefined &&
+          contactDetails.length>0)\ 
+
+          \          {
+
+          \            channel=contactDetails[0].slackChannel;
+
+          \            console.log(contactDetails[0].slackChannel);
+
+          \         }
+
+          \        }       \ 
+
+          \      }
+
+          \       console.log(channel)
+
+          \    console.log(workload.reason)
+
+          \     if(channel ==\"\" )
+
+          \     {
+
+          \        channel= \"general\"
+
+          \      }
+
+          \  \ 
+
+          \        if(workload.reason ==\"FailedCreate\" || workload.reason
+          ==\"FailedScheduling\" )
+
+          \        {
+
+          \           let sleppresult: Schedule = {
+
+          \              workload: workload.workloadname,
+
+          \               workloadid: workload.source,
+
+          \              clustername: workload.clustername,
+
+          \              namespace: workload.namespace,
+
+          \              owner: workload.owner,
+
+          \              podname: workload.podname,
+
+          \              reason: workload.reason,
+
+          \              message: workload.message,
+
+          \              slackChannel : channel,
+
+          \              phase: workload.cloudApplicationInstancePhase,
+
+          \              start: workload.start
+
+          \            };
+
+          \            resultat_schedule.push(sleppresult);
+
+          \       \ 
+
+          \          }
+
+          \          else\ 
+
+          \          {
+
+          \            if(workload.reason ==\"BackOff\" )
+
+          \            {
+
+          \             let sleppresult: Backoff = {
+
+          \                workload: workload.workloadname,
+
+          \               workloadid: workload.source,
+
+          \                clustername: workload.clustername,
+
+          \                namespace: workload.namespace,
+
+          \                owner: workload.owner,
+
+          \                podname: workload.podname,
+
+          \                reason: workload.reason,
+
+          \                message: workload.message,
+
+          \                slackChannel : channel,
+
+          \                 phase: workload.cloudApplicationInstancePhase,
+
+          \                start: workload.start
+
+          \              };\ 
+
+          \              resultat_backoff.push(sleppresult);
+
+          \           \ 
+
+          \            }
+
+          \            else\ 
+
+          \            {
+
+          \              if(workload.reason ==\"Unhealthy\" )
+
+          \              {
+
+          \               let sleppresult: Unhealthy = {
+
+          \                  workload: workload.workloadname,
+
+          \                 workloadid: workload.source,
+
+          \                  clustername: workload.clustername,
+
+          \                  namespace: workload.namespace,
+
+          \                  owner: workload.owner,
+
+          \                  podname: workload.podname,
+
+          \                  reason: workload.reason,
+
+          \                  message: workload.message,
+
+          \                  slackChannel : channel,
+
+          \                   phase: workload.cloudApplicationInstancePhase,
+
+          \                  start: workload.start
+
+          \              };\ 
+
+          \              resultat_unhealthy.push(sleppresult);
+
+          \           \ 
+
+          \             }
+
+          \             else\ 
+
+          \             {
+
+          \                let sleppresult: Other = {
+
+          \                workload: workload.workloadname,
+
+          \                workloadurl: getEnvironmentUrl()+
+          \"/ui/apps/dynatrace.kubernetes/resources/workload?resourceSubType=de\
+          ployment&entityId=\"+ workload.source +\"&detailsTab=Overview\",
+
+          \                workloadid: workload.source,
+
+          \                clustername: workload.clustername,
+
+          \                namespace: workload.namespace,
+
+          \                owner: workload.owner,
+
+          \                podname: workload.podname,
+
+          \                reason: workload.reason,
+
+          \                message: workload.message,
+
+          \                slackChannel : channel,
+
+          \                phase: workload.cloudApplicationInstancePhase,
+
+          \                start: workload.start
+
+          \              };\ 
+
+          \              resultat_other.push(sleppresult);
+
+          \            }
+
+          \          }
+
+          \         }
+
+          \  \ 
+
+          \  }
+
+
+          \ \ 
+
+          \  const res: Result = { backoff_record: resultat_backoff,
+          schedule_record:resultat_schedule , other_record:
+          resultat_other,unhealthy_record : resultat_unhealthy };
+
+          \  return res;
+
+
+          }
+
+          \  "
+      position:
+        x: 0
+        y: 3
+      predecessors:
+        - get_owners_1
+      conditions:
+        states:
+          get_owners_1: OK
+        custom: '{{ result("get_k8s_events").records | length >0 }}'
+    merge_log_traces:
+      name: merge_log_traces
+      description: Build a custom task running js Code
+      action: dynatrace.automations:run-javascript
+      input:
+        script: "    // optional import of sdk modules
+
+          import { execution } from '@dynatrace-sdk/automation-utils';
+
+          import {getEnvironmentUrl} from \"@dynatrace-sdk/app-environment\"
+
+          type Backofftraces = {
+
+          \  namespace: string
+
+          \  workload: string
+
+          \  workloadurl: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  phase: string
+
+          \  log: string,
+
+          \  slackChannel: string\ 
+
+          \  start: Date
+
+          }
+
+
+          type BackoffLogs = {
+
+          \  namespace: string
+
+          \  workload: string
+
+          \  workloadurl: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  url: string
+
+          \  log: string
+
+          \  slackChannel: string\ 
+
+          \  phase: string
+
+          \  start: Date
+
+          }
+
+
+          type Backoff = {
+
+          \  namespace: string
+
+          \  workload: string
+
+          \   workloadurl: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  slackChannel: string
+
+          \  phase: string
+
+          \  start: Date
+
+          }
+
+          type Result = {
+
+          \  log_record: BackoffLogs[]
+
+          \  log_traces_record : Backofftraces[]
+
+          \  backoff_record: Backoff[]
+
+          }
+
+
+          var  resultat_trace= Array<Backofftraces>();
+
+          var  resultat_log= Array<BackoffLogs>();
+
+          var  resultat_backoff= Array<Backoff>();
+
+
+          export default async function ({ execution_id }) {
+
+
+          \  const ex = await execution(execution_id);
+
+          \  console.log('Automated script execution on behalf of', ex.trigger);
+
+
+          \  var result = await ex.result(\"backoff-processing\");
+
+          \  var traces= await ex.result(\"get_application_log_and_traces\");
+
+
+          \  for (const unhealthy of result.backoff_record )
+
+          \  {
+
+          \      var log=\"\";
+
+          \      var traceid=\"\";
+
+          \      for(let i = 0; i < traces.length; i++)
+
+          \      {
+
+          \     \ 
+
+          \        for (const rec of traces[i].records )
+
+          \        {
+
+          \        if(unhealthy.workloadid==rec.workloadid)
+
+          \        {
+
+          \          log= log + rec.log +\"\\n\";
+
+          \          if(rec.spanid)
+
+          \          {
+
+          \            traceid=rec.traceid
+
+          \            }
+
+          \         \ 
+
+          \         }
+
+          \        }       \ 
+
+          \      }
+
+          \     if(log!=\"\")
+
+          \     {
+
+          \       if(traceid!=\"\")
+
+          \      {
+
+          \        let sleppresult: Backofftraces = {
+
+          \                workload: unhealthy.workload,
+
+          \                workloadurl: getEnvironmentUrl()+
+          \"/ui/apps/dynatrace.kubernetes/resources/workload?resourceSubType=de\
+          ployment&entityId=\"+ unhealthy.workloadid +\"&detailsTab=Overview\",
+
+          \                clustername: unhealthy.clustername,
+
+          \                namespace: unhealthy.namespace,
+
+          \                owner: unhealthy.owner,
+
+          \                podname: unhealthy.podname,
+
+          \                reason: unhealthy.reason,
+
+          \                message: unhealthy.message,
+
+          \                phase: unhealthy.phase,
+
+          \                slackChannel : unhealthy.slackChannel,
+
+          \                log: log,
+
+          \                 url:
+          getEnvironmentUrl()+\"/ui/apps/dynatrace.classic.distributed.traces/#\
+          trace;traceid=\"+ traceid,    \ 
+
+          \                start: unhealthy.start
+
+          \              };\ 
+
+          \              resultat_trace.push(sleppresult);
+
+          \      }
+
+          \      else
+
+          \      {
+
+          \        let sleppresult: BackoffLogs = {
+
+          \         workload: unhealthy.workload,
+
+          \                 workloadurl: getEnvironmentUrl()+
+          \"/ui/apps/dynatrace.kubernetes/resources/workload?resourceSubType=de\
+          ployment&entityId=\"+ unhealthy.workloadid +\"&detailsTab=Overview\",
+
+          \              \ 
+
+          \                clustername: unhealthy.clustername,
+
+          \                namespace: unhealthy.namespace,
+
+          \                owner: unhealthy.owner,
+
+          \                podname: unhealthy.podname,
+
+          \                reason: unhealthy.reason,
+
+          \                message: unhealthy.message,
+
+          \                phase: unhealthy.phase,
+
+          \                slackChannel : unhealthy.slackChannel,
+
+          \                log: log,
+
+          \                start: unhealthy.start
+
+          \              };\ 
+
+          \              resultat_log.push(sleppresult);
+
+          \      }
+
+          \     }
+
+          \     else
+
+          \     {
+
+          \       let sleppresult: Backoff = {
+
+          \                workload: unhealthy.workload,
+
+          \                 workloadurl: getEnvironmentUrl()+
+          \"/ui/apps/dynatrace.kubernetes/resources/workload?resourceSubType=de\
+          ployment&entityId=\"+ unhealthy.workloadid +\"&detailsTab=Overview\",
+
+          \              \ 
+
+          \                clustername: unhealthy.clustername,
+
+          \                namespace: unhealthy.namespace,
+
+          \                owner: unhealthy.owner,
+
+          \                podname: unhealthy.podname,
+
+          \                reason: unhealthy.reason,
+
+          \                message: unhealthy.message,
+
+          \                phase: unhealthy.phase,
+
+          \                slackChannel : unhealthy.slackChannel,
+
+          \                start: unhealthy.start
+
+          \              };\ 
+
+          \              resultat_backoff.push(sleppresult);
+
+          \           \ 
+
+          \     }
+
+          \   \ 
+
+          \  }
+
+
+          \  \ 
+
+
+          \ \ 
+
+          \  const res: Result = { log_record: resultat_log,
+          log_traces_record:resultat_trace, resultat_backoff: resultat_backoff
+          };
+
+          \  return res;
+
+
+          }
+
+          \  "
+      position:
+        x: -1
+        y: 6
+      predecessors:
+        - get_application_log_and_traces
+      conditions:
+        states:
+          get_application_log_and_traces: OK
+    unschedule_error:
+      name: unschedule_error
+      description: Build a custom task running js Code
+      action: dynatrace.automations:run-javascript
+      input:
+        script: "// optional import of sdk modules
+
+          import { execution } from '@dynatrace-sdk/automation-utils';
+
+          import {getEnvironmentUrl} from \"@dynatrace-sdk/app-environment\"
+
+          type unschedule_labels = {
+
+          \  namespace: string
+
+          \  workload: string
+
+          \  workloadurl: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  phase: string
+
+          \  nodeselector: string
+
+          \  slackChannel: string\ 
+
+          \  start: Date
+
+          }
+
+
+          type unschedule_node = {
+
+          \  namespace: string
+
+          \  workload: string
+
+          \  workloadurl: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  phase: string
+
+          \  nodeurl: string
+
+          \  nodename: string
+
+          \  slackChannel: string\ 
+
+          \  start: Date
+
+          }
+
+
+
+          type Result = {
+
+          \  unschedule_node: unschedule_node[]
+
+          \  unschedule_label : unschedule_labels[]
+
+          }
+
+
+          var  resultat_node= Array<unschedule_node>();
+
+          var  resultat_label= Array<unschedule_labels>();
+
+
+          export default async function ({ execution_id }) {
+
+
+          \  const ex = await execution(execution_id);
+
+          \  console.log('Automated script execution on behalf of', ex.trigger);
+
+
+          \  var result = await ex.result(\"javascript_merge\") ;
+
+          \  var dql= await
+          ex.result(\"schedule_get_node_and_allocation_details\");
+
+
+          \  for (const unhealthy of result.schedule_record )
+
+          \  {
+
+
+          \      for(let i = 0; i < dql.length; i++)
+
+          \      {
+
+
+          \         console.log(\"looping the dql result\");
+
+          \         for(const event_detail of dql[i].records )
+
+          \        {
+
+          \           console.log(\"looping the dql record\");
+
+          \         if(unhealthy.podname==event_detail.podname)
+
+          \         {
+
+          \            console.log(\"we have a match\");
+
+          \           if( event_detail.nodename)
+
+          \             {
+
+          \                 let sleppresult: unschedule_node = {
+
+          \                workload: unhealthy.workload,
+
+          \                workloadurl: getEnvironmentUrl()+
+          \"/ui/apps/dynatrace.kubernetes/resources/workload?resourceSubType=de\
+          ployment&entityId=\"+ unhealthy.workloadid
+          +\"&detailsTab=Overview\",\ 
+
+          \                clustername: unhealthy.clustername,
+
+          \                namespace: unhealthy.namespace,
+
+          \                owner: unhealthy.owner,
+
+          \                podname: unhealthy.podname,
+
+          \                nodename: event_detail.nodename,
+
+          \                nodeurl:
+          getEnvironmentUrl()+\"/ui/apps/dynatrace.kubernetes/resources/node?en\
+          tityId=\"+ event_detail.nodeid +\"&detailsTab=Overview\",    \ 
+
+          \                reason: unhealthy.reason,
+
+          \                message: unhealthy.message,
+
+          \                phase: unhealthy.phase,
+
+          \                slackChannel : unhealthy.slackChannel,
+
+          \                 start: unhealthy.start
+
+          \              };\ 
+
+          \              resultat_node.push(sleppresult);
+
+          \             }
+
+          \            else\ 
+
+          \             {
+
+          \               let sleppresult: unschedule_labels = {
+
+          \                workload: unhealthy.workload,
+
+          \                workloadurl: getEnvironmentUrl()+
+          \"/ui/apps/dynatrace.kubernetes/resources/workload?resourceSubType=de\
+          ployment&entityId=\"+ unhealthy.workloadid
+          +\"&detailsTab=Overview\",\ 
+
+          \                clustername: unhealthy.clustername,
+
+          \                namespace: unhealthy.namespace,
+
+          \                owner: unhealthy.owner,
+
+          \                podname: unhealthy.podname,
+
+          \                reason: unhealthy.reason,
+
+          \                message: unhealthy.message,
+
+          \                phase: unhealthy.phase,
+
+          \                slackChannel : unhealthy.slackChannel,
+
+          \                start: unhealthy.start,
+
+          \                nodeselector:  event_detail.labels
+
+          \              };\ 
+
+          \              resultat_label.push(sleppresult);
+
+          \             }
+
+          \         break;
+
+          \        }       \ 
+
+          \      }
+
+          \   \ 
+
+          \   \ 
+
+          \  }
+
+
+          \\ 
+
+          \  \ 
+
+          }
+
+          \ \ 
+
+          \  const res: Result = { unschedule_node: resultat_node,
+          unschedule_label:resultat_label};
+
+          \  return res;
+
+
+          }
+
+          \  "
+      position:
+        x: 2
+        y: 5
+      predecessors:
+        - schedule_get_node_and_allocation_details
+      conditions:
+        states:
+          schedule_get_node_and_allocation_details: OK
+    backoff-processing:
+      name: backoff-processing
+      description: Build a custom task running js Code
+      action: dynatrace.automations:run-javascript
+      input:
+        script: "   // optional import of sdk modules
+
+          import { execution } from '@dynatrace-sdk/automation-utils';
+
+
+
+          type BackoffAPP = {
+
+          \  namespace: string
+
+          \   workloadid: string
+
+          \  workload: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  slackChannel: string
+
+          \  phase: string
+
+          \  start: Date
+
+          }
+
+
+          type Unhealthy = {
+
+          \  namespace: string
+
+          \   workloadid: string
+
+          \  workload: string
+
+          \  clustername: string
+
+          \  owner: string
+
+          \  podname: string
+
+          \  reason: string
+
+          \  message: string
+
+          \  phase: string
+
+          \  slackChannel: string
+
+          \  start: Date
+
+          }
+
+          type Result = {
+
+          \  backoffapp_record: Backoff[]
+
+          \  unhealthy_record : Unhealthy[]
+
+          }
+
+
+          var  resultat_backoff= Array<Backoff>();
+
+          var  resultat_unhealthy= Array<Unhealthy>();
+
+
+
+          export default async function ({ execution_id }) {
+
+
+          \  const ex = await execution(execution_id);
+
+          \  console.log('Automated script execution on behalf of', ex.trigger);
+
+
+          \  var result = await ex.result(\"javascript_merge\");
+
+
+          \  for (const backoff of result.backoff_record )
+
+          \  {
+
+          \      var channel=false;
+
+          \      for(const unhealth of result.unhealthy_record)
+
+          \      {
+
+          \       \ 
+
+          \        if(unhealth.workloadid==backoff.workloadid)
+
+          \        {
+
+          \          channel=true;
+
+          \          let sleppresult: Unhealthy = {
+
+          \                  workload: unhealth.workload,
+
+          \                 workloadid: unhealth.workloadid,
+
+          \                  clustername: unhealth.clustername,
+
+          \                  namespace: unhealth.namespace,
+
+          \                  owner: unhealth.owner,
+
+          \                  podname: unhealth.podname,
+
+          \                  reason: unhealth.reason,
+
+          \                  phase:  unhealth.phase,
+
+          \                  message: unhealth.message,
+
+          \               \ 
+
+          \                  slackChannel : unhealth.slackChannel,
+
+          \                  start: unhealth.start
+
+          \              };\ 
+
+          \           resultat_unhealthy.push(sleppresult);
+
+          \         \ 
+
+          \        }       \ 
+
+          \      }
+
+          \     if(!channel)
+
+          \     {
+
+          \       let sleppresult: Backoff = {
+
+          \                workload: backoff.workload,
+
+          \               workloadid: backoff.workloadid,
+
+          \                clustername: backoff.clustername,
+
+          \                namespace: backoff.namespace,
+
+          \                owner: backoff.owner,
+
+          \                podname: backoff.podname,
+
+          \                reason: backoff.reason,
+
+          \                message: backoff.message,
+
+          \                  phase:  backoff.phase,
+
+          \                slackChannel : backoff.slackChannel,
+
+          \                start: backoff.start
+
+          \              };\ 
+
+          \              resultat_backoff.push(sleppresult);
+
+          \           \ 
+
+          \     }
+
+          \   \ 
+
+          \  }
+
+
+          \    for(const unhealth of result.unhealthy_record)
+
+          \    {
+
+          \        var channel=false;
+
+          \        for(const newunhealth of resultat_unhealthy )
+
+          \          {
+
+          \              if(unhealth.workloadid==newunhealth.workloadid)
+
+          \                channel= true;
+
+          \          }
+
+
+          \         if(!channel)
+
+          \          {
+
+          \            let sleppresult: Unhealthy = {
+
+          \                  workload: unhealth.workload,
+
+          \                 workloadid: unhealth.workloadid,
+
+          \                  clustername: unhealth.clustername,
+
+          \                  namespace: unhealth.namespace,
+
+          \                  owner: unhealth.owner,
+
+          \                  podname: unhealth.podname,
+
+          \                  reason: unhealth.reason,
+
+          \                  message: unhealth.message,
+
+          \                  slackChannel : unhealth.slackChannel,
+
+          \                  phase:  unhealth.phase,
+
+          \                  start: unhealth.start
+
+          \              };\ 
+
+          \           resultat_unhealthy.push(sleppresult);
+
+          \          }
+
+          \    }
+
+
+          \ \ 
+
+          \  const res: Result = { backoff_record: resultat_backoff,
+          unhealthy_record:resultat_unhealthy };
+
+          \  return res;
+
+
+          }
+
+          \  "
+      position:
+        x: -1
+        y: 4
+      predecessors:
+        - javascript_merge
+      conditions:
+        states:
+          javascript_merge: SUCCESS
+        custom: '{{  (result("javascript_merge").backoff_record | length >0  ) or  (
+          result("javascript_merge").unhealthy_record | length >0 ) }}'
+    get_a_health_trace:
+      name: get_a_health_trace
+      description: Executes DQL query
+      action: dynatrace.automations:execute-dql-query
+      input:
+        query: >2
+            fetch spans, from: toTimestamp("{{_.item.start}}") -
+          duration(toLong(2),unit:"s"), to: toTimestamp("{{_.item.start}}") +
+          duration(toLong(1),unit:"s") 
+            | filter contains(endpoint.name,"Check") or contains( endpoint.name,"Health")
+            | filter dt.entity.cloud_application=="{{ _.item.workloadid }}"
+            | fields duration, traceid=trace.id, workloadid=dt.entity.cloud_application
+            | summarize span.id=takelast(span.id), duration= takeLast(duration) , by:{workloadid}
+      position:
+        x: 0
+        y: 5
+      predecessors:
+        - backoff-processing
+      conditions:
+        states:
+          backoff-processing: OK
+        custom: '{{ result("backoff-processing").unhealthy_record | length >0 }}'
+      concurrency: 1
+      withItems: item in {{result("backoff-processing").unhealthy_record}}
+    message_without_node:
+      name: message_without_node
+      description: Send a message to a Slack workspace
+      action: dynatrace.slack:slack-send-message
+      input:
+        channel: "{{  _.item.slackChannel }}"
+        message: |-
+          *K8s TroubleShooting Assistant*
+          Hello,  
+          Some Application cannot be scheduled even if it has a node assigned  :
+          - For cluster *{{  _.item.clustername }}*
+            namespace: *{{  _.item.namespace }}*
+            workload: <{{_.item.workloadurl}}|{{_.item.workload}}>
+            pod name: *{{  _.item.podname }}*
+            node name: <{{_.item.nodeurl}}|{{_.item.nodename}}>
+            phase: * {{ _.item.phase }}*
+            event: *{{ _.item.reason }}*
+            message: *{{ _.item.message }}*
+        reaction: []
+        connection: ""
+        workflowID: "{{ execution().workflow.id }}"
+        channelType: expression
+        executionID: "{{ execution().id }}"
+        executionDate: "{{ execution().started_at }}"
+        appendToThread: false
+        selectedRequestType: 0
+        attachmentToggleValue: none
+      position:
+        x: 2
+        y: 6
+      predecessors:
+        - unschedule_error
+      conditions:
+        states:
+          unschedule_error: OK
+        custom: '{{ result("unschedule_error").unschedule_node | length >0 }}'
+      concurrency: 1
+      withItems: item in {{result("unschedule_error").unschedule_node }}
+    send_backoff_message:
+      name: send_backoff_message
+      description: Send a message to a Slack workspace
+      action: dynatrace.slack:slack-send-message
+      input:
+        channel: "{{  _.item.slackChannel }}"
+        message: |-
+          *K8s TroubleShooting Assistant*
+          Hello,  
+          Some Application are in errors  :
+          - For cluster *{{  _.item.clustername }}*
+            namespace: *{{  _.item.namespace }}*
+            workload: <{{_.item.workloadurl}}|{{_.item.workload}}>
+            pod name: *{{  _.item.podname }}*
+            phase: * {{ _.item.phase }}*
+            event: *{{ _.item.reason }}*
+            message: *{{ _.item.message }}*
+        reaction: []
+        connection: ""
+        workflowID: "{{ execution().workflow.id }}"
+        channelType: expression
+        executionID: "{{ execution().id }}"
+        executionDate: "{{ execution().started_at }}"
+        appendToThread: false
+        selectedRequestType: 0
+        attachmentToggleValue: none
+      position:
+        x: -1
+        y: 7
+      predecessors:
+        - merge_log_traces
+      conditions:
+        states:
+          merge_log_traces: OK
+        custom: '{{ result("merge_log_traces").resultat_backoff | length >0 }}'
+      concurrency: 1
+      withItems: item in  {{ result("merge_log_traces").resultat_backoff }}
+    send_message_traces_logs:
+      name: send_message_traces_logs
+      description: Send a message to a Slack workspace
+      action: dynatrace.slack:slack-send-message
+      input:
+        channel: "{{  _.item.slackChannel }}"
+        message: |-
+          *K8s TroubleShooting Assistant*
+          Hello,  
+          Some Application are in errors  :
+          - For cluster *{{  _.item.clustername }}*
+            namespace: *{{  _.item.namespace }}*
+            workload: <{{_.item.workloadurl}}|{{_.item.workload}}>
+            pod name: *{{  _.item.podname }}*
+            phase: * {{ _.item.phase }}*
+            event: *{{ _.item.reason }}*
+            message: *{{ _.item.message }}*
+            log: {{ _.item.log }} 
+            trace: {{_.item.url}}
+        reaction: []
+        connection: ""
+        workflowID: "{{ execution().workflow.id }}"
+        channelType: expression
+        executionID: "{{ execution().id }}"
+        executionDate: "{{ execution().started_at }}"
+        appendToThread: false
+        selectedRequestType: 0
+        attachmentToggleValue: none
+      position:
+        x: -2
+        y: 7
+      predecessors:
+        - merge_log_traces
+      conditions:
+        states:
+          merge_log_traces: OK
+        custom: '{{ result("merge_log_traces").log_traces_record | length >0 }}'
+      concurrency: 1
+      withItems: item in {{ result("merge_log_traces").log_traces_record }}
+    send_message_with_labels:
+      name: send_message_with_labels
+      description: Send a message to a Slack workspace
+      action: dynatrace.slack:slack-send-message
+      input:
+        channel: "{{  _.item.slackChannel }}"
+        message: |-
+          *K8s TroubleShooting Assistant*
+          Hello,  
+          Some Application cannot be scheduled due to a node selector  :
+          - For cluster *{{  _.item.clustername }}*
+            namespace: *{{  _.item.namespace }}*
+            workload: <{{_.item.workloadurl}}|{{_.item.workload}}>
+            pod name: *{{  _.item.podname }}*
+            node sector: *{{  _.item.nodeselector }}*
+            phase: * {{ _.item.phase }}*
+            event: *{{ _.item.reason }}*
+            message: *{{ _.item.message }}*
+        reaction: []
+        connection: ""
+        workflowID: "{{ execution().workflow.id }}"
+        channelType: expression
+        executionID: "{{ execution().id }}"
+        executionDate: "{{ execution().started_at }}"
+        appendToThread: false
+        selectedRequestType: 0
+        attachmentToggleValue: none
+      position:
+        x: 3
+        y: 6
+      predecessors:
+        - unschedule_error
+      conditions:
+        states:
+          unschedule_error: OK
+        custom: '{{ result("unschedule_error").unschedule_label | length >0 }}'
+      concurrency: 1
+      withItems: item in {{result("unschedule_error").unschedule_label}}
+    send_message_with_traces:
+      name: send_message_with_traces
+      description: Send a message to a Slack workspace
+      action: dynatrace.slack:slack-send-message
+      input:
+        channel: "{{  _.item.slackChannel }}"
+        message: |-
+          *K8s TroubleShooting Assistant*
+          Hello,  
+          Some health , readiness probes are failing  :
+          - For cluster *{{  _.item.clustername }}*
+            namespace: *{{  _.item.namespace }}*
+            workload: <{{_.item.workloadurl}}|{{_.item.workload}}>
+            pod name: *{{  _.item.podname }}*
+            phase: * {{ _.item.phase }}*
+            event: *{{ _.item.reason }}*
+            message: *{{ _.item.message }}*
+            trace: {{ _.item.url }} 
+            span duration: *{{ _.item.healthduration }}*
+        reaction: []
+        connection: ""
+        workflowID: "{{ execution().workflow.id }}"
+        channelType: expression
+        executionID: "{{ execution().id }}"
+        executionDate: "{{ execution().started_at }}"
+        appendToThread: false
+        selectedRequestType: 0
+        attachmentToggleValue: none
+      position:
+        x: 2
+        y: 8
+      predecessors:
+        - merge_traces
+      conditions:
+        states:
+          merge_traces: OK
+        custom: '{{ result("merge_traces").trace_record | length >0 }}'
+      concurrency: 1
+      withItems: item in {{ result("merge_traces").trace_record }}
+    send_message_witout_trace:
+      name: send_message_witout_trace
+      description: Send a message to a Slack workspace
+      action: dynatrace.slack:slack-send-message
+      input:
+        channel: "{{  _.item.slackChannel }}"
+        message: |-
+          *K8s TroubleShooting Assistant*
+          Hello,  
+          Some health , readiness probes are failing  :
+          - For cluster *{{  _.item.clustername }}*
+            namespace: *{{  _.item.namespace }}*
+            workload: <{{_.item.workloadurl}}|{{_.item.workload}}>
+            pod name: *{{  _.item.podname }}*
+            phase: *{{ _.item.phase }}*
+            event: *{{ _.item.reason }}*
+            message: *{{ _.item.message }}*
+        reaction: []
+        connection: ""
+        workflowID: "{{ execution().workflow.id }}"
+        channelType: expression
+        executionID: "{{ execution().id }}"
+        executionDate: "{{ execution().started_at }}"
+        appendToThread: false
+        selectedRequestType: 0
+        attachmentToggleValue: none
+      position:
+        x: 0
+        y: 8
+      predecessors:
+        - merge_traces
+      conditions:
+        states:
+          merge_traces: OK
+        custom: '{{ result("merge_traces").unhealthy_record | length >0 }}'
+      concurrency: 1
+      withItems: item in {{ result("merge_traces").unhealthy_record }}
+    get_application_log_and_traces:
+      name: get_application_log_and_traces
+      description: Executes DQL query
+      action: dynatrace.automations:execute-dql-query
+      input:
+        query: >2-
+           fetch logs , from:  toTimestamp("{{_.item.start}}") -
+          duration(toLong(2),unit:"s"), to: toTimestamp("{{_.item.start}}") +
+          duration(toLong(1),unit:"s")
+           | filter dt.entity.cloud_application == "{{_.item.workloadid}}"
+           | lookup [
+             fetch spans, from: toTimestamp("{{_.item.start}}") - duration(toLong(2),unit:"s"), to: toTimestamp("{{_.item.start}}") + duration(toLong(1),unit:"s") 
+             | summarize span.id=takelast(span.id), duration= takeLast(duration) , by:{dt.entity.cloud_application_instance}
+           ] , lookupField:dt.entity.cloud_application_instance ,sourceField:dt.entity.cloud_application_instance , fields:{duration,span.id} 
+           | fields workloadid=dt.entity.cloud_application, duration= duration, traceid=trace.id , log=content
+      position:
+        x: -1
+        y: 5
+      predecessors:
+        - backoff-processing
+      conditions:
+        states:
+          backoff-processing: OK
+        custom: ' {{result("backoff-processing").backoff_record | length > 0}}'
+      concurrency: 1
+      withItems: item in {{ result("backoff-processing").backoff_record }}
+    schedule_get_node_and_allocation_details:
+      name: schedule_get_node_and_allocation_details
+      description: Executes DQL query
+      action: dynatrace.automations:execute-dql-query
+      input:
+        query: >-
+          fetch dt.entity.cloud_application_instance, from: -30m
+
+          | filter entity.name == "{{ _.item.podname }}"
+
+          | fieldsAdd  nodeid=runs_on[dt.entity.kubernetes_node],
+          cloudapplicationid=instance_of[dt.entity.cloud_application] ,
+          podname=entity.name
+
+          | lookup [
+            timeseries values = sum(dt.kubernetes.container.requests_cpu), by:{dt.entity.cloud_application}, from: -2m
+            | fieldsAdd requests_cpu = arrayFirst(values)
+            | limit 20000
+          ], sourceField:cloudapplicationid,
+          lookupField:dt.entity.cloud_application, fields:{requests_cpu},
+          executionOrder:leftFirst
+
+          | lookup [
+            timeseries values = sum(dt.kubernetes.container.requests_memory), by:{dt.entity.cloud_application}, from: -2m
+            | fieldsAdd requests_memory = arrayFirst(values)
+            | limit 20000
+          ], sourceField:cloudapplicationid,
+          lookupField:dt.entity.cloud_application, fields:{requests_memory},
+          executionOrder:leftFirst
+
+          | lookup [
+           fetch logs
+           | filter k8s.object.kind =="Pod"
+           | parse k8s.object.nodeselector,"JSON:labels"
+          ], sourceField: podname, lookupField:k8s.pod.name , fields:{labels,
+          nodename=k8s.node.name}
+
+          | lookup [
+           fetch dt.entity.kubernetes_node
+           | fields kubernetesLabels, id
+          ], sourceField: nodeid, lookupField:id , fields:kubernetesLabels
+      position:
+        x: 0
+        y: 4
+      predecessors:
+        - javascript_merge
+      conditions:
+        states:
+          javascript_merge: SUCCESS
+        custom: '{{ result("javascript_merge").schedule_record | length >0 }}'
+      concurrency: 1
+      withItems: item in {{result("javascript_merge").schedule_record}}
+  description: ""
+  trigger:
+    eventTrigger:
+      filterQuery: 'event.provider=="KUBERNETES_EVENT" and  event.status == "ACTIVE"
+        and dt.source_entity.type == "cloud_application_instance" and   not
+        matchesValue(status, "INFO") '
+      isActive: true
+      uniqueExpression: '{{ event()["event.id"] }}'
+      triggerConfiguration:
+        type: event
+        value:
+          query: 'event.provider=="KUBERNETES_EVENT" and  event.status == "ACTIVE" and
+            dt.source_entity.type == "cloud_application_instance" and   not
+            matchesValue(status, "INFO") '
+          eventType: events
+  schemaVersion: 3

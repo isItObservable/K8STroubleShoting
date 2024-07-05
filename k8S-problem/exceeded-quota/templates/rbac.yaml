@@ -1,0 +1,39 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: exceeded-quota
+rules:
+- apiGroups:
+  - "apps"
+  resources:
+  - deployments
+  verbs:
+  - list
+  - get
+- apiGroups:
+  - "apps"
+  resources:
+  - deployments/scale
+  resourceNames:
+  - {{ .Values.faultInjection.nameOverride }}
+  verbs:
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: exceeded-quota
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: exceeded-quota
+subjects:
+- kind: ServiceAccount
+  name: exceeded-quota
+  namespace: {{ .Values.faultInjection.namespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: exceeded-quota
+  namespace: {{ .Values.faultInjection.namespace }}
