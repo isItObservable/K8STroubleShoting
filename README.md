@@ -116,14 +116,14 @@ chmod 777 deployment.sh
 
 in the `Dynatrace` folder , you will find the json file containing the dashboard for the API server.
 To deploy it click , on dashboard 
-<p align="center"><img src="/image/dashboard_click.png" width="40%" alt="operator token" /></p>
+<p align="center"><img src="/image/dashboard_click.png" width="10%" alt="operator token" /></p>
 And click on upload , to upload `dynatrace/Api server health.json`
-<p align="center"><img src="/image/api_server_health.png" width="40%" alt="operator token" /></p>
+<p align="center"><img src="/image/api_server_health.png" width="60%" alt="operator token" /></p>
 
 ### 7. The kublet/kubeproxy dashboard
 
 Similar to the previous step, upload `dynatrace/kubelet & Kubeproxy.json`
-<p align="center"><img src="/image/kubelet_kubeproxy.png" width="40%" alt="operator token" /></p>
+<p align="center"><img src="/image/kubelet_kubeproxy.png" width="60%" alt="operator token" /></p>
 
 ### 8. Troubleshooting workflow
 
@@ -131,7 +131,7 @@ you will find a workflow sending messages to the team with details on why their 
 This Worflow would require to reconfigure the [slack integraiton](https://docs.dynatrace.com/docs/platform-modules/automations/workflows/actions/slack) and to install the Slack application from the Hub.
 
 To import the workflow you will need to click on worflow .
-<p align="center"><img src="/image/workflow_click.png" width="40%" alt="operator token" /></p>
+<p align="center"><img src="/image/workflow_click.png" width="10%" alt="operator token" /></p>
 
 Click on Upload to import the following file: `ddynatrace/wftpl_troubeshooting_k8s_workload.yaml`
-<p align="center"><img src="/image/workload.png" width="40%" alt="operator token" /></p>
+<p align="center"><img src="/image/workload.png" width="60%" alt="operator token" /></p>
